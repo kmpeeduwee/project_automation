@@ -6,115 +6,79 @@ on:
 
 jobs:
   move:
-    name: Move Issue to In Progress
+    name: Move
     runs-on: ubuntu-latest
     steps:
       - name: Move issue to In Progress
         env:
-          GITHUB_TOKEN: ${{ secrets.PROJECTS_MOVE }}
-          ISSUE_ID: ${{ github.event.issue.node_id }}
+          GH_TOKEN: ${{ secrets.PROJECTS_MOVE }}
+          PROJECT_NUMBER: <номер_вашего_проекта>
+          COLUMN_NAME: "In Progress"
         run: |
-          # Получаем ID проекта
-          PROJECT_ID=$(gh api graphql -f query='
-            query {
-              repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") {
-                projectsV2(first: 1) {
-                  nodes {
-                    id
-                  }
+          issue_id=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $issue: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $issue) {
+                  id
                 }
               }
-            }
-          ' --jq '.data.repository.projectsV2.nodes[0].id')
+            }' -f owner=${{ github.repository_owner }} -f repo=${{ github.event.repository.name }} -f issue=${{ github.event.issue.number }} --jq '.data.repository.issue.id')
           
-          echo "Project ID: $PROJECT_ID"
-          
-          # Получаем ID колонки "In Progress"
-          IN_PROGRESS_FIELD_ID=$(gh api graphql -f query='
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  fields(first: 20) {
-                    nodes {
-                      ... on ProjectV2SingleSelectField {
-                        id
-                        name
-                        options {
-                          id
-                          name
-                        }
-                      }
-                    }
-                  }
+          project_id=$(gh api graphql -f query='
+            query($org: String!, $number: Int!) {
+              organization(login: $org) {
+                projectV2(number: $number) {
+                  id
                 }
               }
-            }
-          ' -f projectId=$PROJECT_ID --jq '.data.node.fields.nodes[] | select(.name=="Status") | .id')
-          
-          echo "Status field ID: $IN_PROGRESS_FIELD_ID"
-          
-          # Получаем ID опции "In Progress"
-          IN_PROGRESS_OPTION_ID=$(gh api graphql -f query='
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  fields(first: 20) {
-                    nodes {
-                      ... on ProjectV2SingleSelectField {
-                        id
-                        name
-                        options {
-                          id
-                          name
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          ' -f projectId=$PROJECT_ID --jq '.data.node.fields.nodes[] | select(.name=="Status") | .options[] | select(.name=="In Progress") | .id')
-          
-          echo "In Progress option ID: $IN_PROGRESS_OPTION_ID"
-          
-          # Находим ID элемента проекта для данной задачи
-          ITEM_ID=$(gh api graphql -f query='
-            query($projectId: ID!, $issueId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  items(first: 100) {
-                    nodes {
-                      id
-                      content {
-                        ... on Issue {
-                          id
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          ' -f projectId=$PROJECT_ID -f issueId=$ISSUE_ID --jq ".data.node.items.nodes[] | select(.content.id==\"$ISSUE_ID\") | .id")
-          
-          echo "Item ID: $ITEM_ID"
-          
-          # Обновляем статус задачи на "In Progress"
+            }' -f org=${{ github.repository_owner }} -f number=${{ env.PROJECT_NUMBER }} --jq '.data.organization.projectV2.id')
+
           gh api graphql -f query='
-            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-              updateProjectV2ItemFieldValue(
-                input: {
-                  projectId: $projectId
-                  itemId: $itemId
-                  fieldId: $fieldId
-                  value: { 
-                    singleSelectOptionId: $optionId
+            mutation($project: ID!, $item: ID!) {
+              addProjectV2ItemById(input: {projectId: $project, contentId: $item}) {
+                item {
+                  id
+                }
+              }
+            }' -f project=$project_id -f item=$issue_id
+
+          field_id=$(gh api graphql -f query='
+            query($project: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  fields(first: 20) {
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        name
+                      }
+                    }
                   }
                 }
-              ) {
+              }
+            }' -f project=$project_id --jq '.data.node.fields.nodes[] | select(.name == "Status") | .id')
+
+          option_id=$(gh api graphql -f query='
+            query($project: ID!, $field: ID!) {
+              node(id: $project) {
+                ... on ProjectV2 {
+                  field(id: $field) {
+                    ... on ProjectV2SingleSelectField {
+                      options {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }' -f project=$project_id -f field=$field_id --jq --arg column "${{ env.COLUMN_NAME }}" '.data.node.field.options[] | select(.name == $column) | .id')
+
+          gh api graphql -f query='
+            mutation($item: ID!, $field: ID!, $option: ID!) {
+              updateProjectV2ItemFieldValue(input: {itemId: $item, fieldId: $field, singleSelectOptionId: $option}) {
                 projectV2Item {
                   id
                 }
               }
-            }
-          ' -f projectId=$PROJECT_ID -f itemId=$ITEM_ID -f fieldId=$IN_PROGRESS_FIELD_ID -f optionId=$IN_PROGRESS_OPTION_ID
+            }' -f item=$issue_id -f field=$field_id -f option=$option_id
