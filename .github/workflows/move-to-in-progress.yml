@@ -12,7 +12,7 @@ jobs:
       - name: Move issue to In Progress
         env:
           GH_TOKEN: ${{ secrets.PROJECTS_MOVE }}
-          PROJECT_NUMBER: <номер_вашего_проекта>
+          PROJECT_NUMBER: 1
           COLUMN_NAME: "In Progress"
         run: |
           issue_id=$(gh api graphql -f query='
